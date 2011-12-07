@@ -48,7 +48,7 @@ if __name__ == '__main__':
         parser.add_argument('-p', metavar = 'prefix',   help='path prefix for objects to create', default='')
         parser.add_argument('-t', metavar = 'number',   help='number of parallel upload processes (10 by default)', default=10, type=int)
         parser.add_argument('-d', metavar = 'level',    help='debug level', type=int, default=logging.INFO)
-        parser.add_argument('-n', metavar = 'source',   help='use service net (False by default)', default=False, type=bool)
+        parser.add_argument('-n',                       help='use service net (False by default)', default=False, type=bool)
         
         args = parser.parse_args()
         
@@ -66,7 +66,7 @@ if __name__ == '__main__':
         beginTime = datetime.now() 
        
         # Init threads
-        for i in range(0,3):
+        for i in range(0,args.t):
             thread = UploadThread()
             thread.daemon = True
             thread.start()
