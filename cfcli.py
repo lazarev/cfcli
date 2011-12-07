@@ -19,6 +19,7 @@ finishFlag      = False
 workQueue       = None
 connectionPool  = None
 containerName   = None
+dropped         = 0
 
 class UploadThread (threading.Thread):
     def run(self):        
@@ -30,8 +31,19 @@ class UploadThread (threading.Thread):
                 task = workQueue.get(block=True, timeout=1)
                 object = container.create_object(task['dst'])
                 logger.info(self.name + ' execute: ' + unicode(task))
-                object.load_from_filename(task['src'])                
-                logger.debug(self.name + ' task is done')
+                
+                #overcome problems in lower levels code
+                tryies = 10
+                while tryies > 0:
+                    try:
+                        object.load_from_filename(task['src'])
+                        logger.debug(self.name + ' task is done')
+                    except:
+                        tryies = tryies - 1
+                        if (tryies==0):
+                            logger.error(self.name + ' task execution tries exceeded. Dropping task.')
+                            dropped = dropped + 1                   
+                
                 workQueue.task_done()
             except Queue.Empty:
                 pass
@@ -86,7 +98,9 @@ if __name__ == '__main__':
         
         workQueue.join()
         finishFlag = True
-        logger.info('Work is done at ' + unicode(datetime.now() - beginTime))
+        logger.info('Work is done at:  ' + unicode(datetime.now() - beginTime))
+        logger.info('        threads: ' + args.t)
+        logger.info('  dropped tasks: ' + dropped)
         
         for thread in threads:
             if (thread.isAlive()): thread.join() 
