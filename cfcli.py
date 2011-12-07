@@ -20,6 +20,7 @@ workQueue       = None
 connectionPool  = None
 containerName   = None
 dropped         = 0
+bogus           = False
 
 class UploadThread (threading.Thread):
     def run(self):        
@@ -29,14 +30,15 @@ class UploadThread (threading.Thread):
         while not finishFlag:
             try:
                 task = workQueue.get(block=True, timeout=1)
-                object = container.create_object(task['dst'])
                 logger.info(self.name + ' execute: ' + unicode(task))
                 
                 #overcome problems in lower levels code
                 tryies = 10
                 while tryies > 0:
                     try:
-                        object.load_from_filename(task['src'])
+                        if not bogus:
+                            object = container.create_object(task['dst'])
+                            object.load_from_filename(task['src'])
                         logger.debug(self.name + ' task is done')
                     except:
                         tryies = tryies - 1
@@ -61,6 +63,7 @@ if __name__ == '__main__':
         parser.add_argument('-t', metavar = 'number',   help='number of parallel upload processes (10 by default)', default=10, type=int)
         parser.add_argument('-d', metavar = 'level',    help='debug level', type=int, default=logging.INFO)
         parser.add_argument('-n',                       help='use service net (False by default)', default=False, type=bool)
+        parser.add_argument('-b',                       help='don\'t upload anything actually. (For test purposes)', default=False, type=bool)
         
         args = parser.parse_args()
         
@@ -73,6 +76,7 @@ if __name__ == '__main__':
         containerName   = args.container
         path            = args.s
         prefix          = args.p
+        bogus           = args.b
 
         threads = []
         beginTime = datetime.now() 
@@ -91,8 +95,7 @@ if __name__ == '__main__':
                 else:
                     dir = ''
                 task = {'src' : os.path.join(root, curFile),
-                        'dst' : os.path.join(prefix, dir, curFile)
-                }
+                        'dst' : os.path.join(prefix, dir, curFile)}                
                 logger.debug('Put task for workers: ' + unicode(task))
                 workQueue.put(task)
         
