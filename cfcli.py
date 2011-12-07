@@ -67,8 +67,6 @@ if __name__ == '__main__':
         
         args = parser.parse_args()
         
-        print(args)
-
         logger.setLevel(args.d)
         
         connectionPool  = cloudfiles.ConnectionPool(args.username, args.apiKey, servicenet=args.n)
@@ -90,10 +88,11 @@ if __name__ == '__main__':
         
         for root, dirs, files in os.walk(path, followlinks=False):
             for curFile in files:
-                if not path == root:
-                    dir = root[len(path)+1:len(root)]+'/'
-                else:
-                    dir = ''
+#                if not path == root:
+#                    dir = root[len(path)+1:len(root)]+'/'
+#                else:
+#                    dir = ''
+                dir = os.path.relpath(path, root)
                 task = {'src' : os.path.join(root, curFile),
                         'dst' : os.path.join(prefix, dir, curFile)}                
                 logger.debug('Put task for workers: ' + unicode(task))
