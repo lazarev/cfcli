@@ -4,7 +4,7 @@ Created on 05.12.2011
 
 @author: Lazarev
 '''
-import os
+import os, sys
 import cloudfiles
 import threading
 import Queue
@@ -33,16 +33,17 @@ class UploadThread (threading.Thread):
                 logger.info(self.name + ' execute: ' + unicode(task))
                 
                 #overcome problems in lower levels code
-                tryies = 10
-                while tryies > 0:
+                tries = 10
+                while tries > 0 and not bogus:
                     try:
-                        if not bogus:
-                            object = container.create_object(task['dst'])
-                            object.load_from_filename(task['src'])
+                        obj = container.create_object(task['dst'])
+                        obj.load_from_filename(task['src'])
                         logger.debug(self.name + ' task is done')
-                    except:
-                        tryies = tryies - 1
-                        if (tryies==0):
+                        break
+                    except :
+                        logger.error(self.name + '('+ tries +' tries available)' + +' : ' + sys.exc_info()[0])
+                        tries = tries - 1                                               
+                        if (tries==0):
                             logger.error(self.name + ' task execution tries exceeded. Dropping task.')
                             dropped = dropped + 1                   
                 
@@ -55,26 +56,27 @@ class UploadThread (threading.Thread):
 if __name__ == '__main__':    
     try:
         parser = argparse.ArgumentParser(description='Upload directory tree into Rackspace Cloud Files store.')
-        parser.add_argument('username',                 help='account name')
-        parser.add_argument('apiKey',                   help='rack space API access key')
-        parser.add_argument('container',                help='target container')
-        parser.add_argument('-s', metavar = 'source',   help='source path to upload (current by default)', default='.')
-        parser.add_argument('-p', metavar = 'prefix',   help='path prefix for objects to create', default='')
-        parser.add_argument('-t', metavar = 'number',   help='number of parallel upload processes (10 by default)', default=10, type=int)
-        parser.add_argument('-d', metavar = 'level',    help='debug level', type=int, default=logging.INFO)
-        parser.add_argument('-n',                       help='use service net (False by default)', default=False, type=bool)
-        parser.add_argument('-b',                       help='don\'t upload anything actually. (For test purposes)', default=False, type=bool)
+        parser.add_argument('-u', metavar = 'username',  help='account name', required=True)
+        parser.add_argument('-k', metavar = 'apiKey',    help='rack space API access key', required=True)
+        parser.add_argument('-c', metavar = 'container', help='target container')
+        parser.add_argument('-s', metavar = 'source',    help='source path to upload (current by default)', default='.')
+        parser.add_argument('-p', metavar = 'prefix',    help='path prefix for objects to create', default='')
+        parser.add_argument('-t', metavar = 'number',    help='number of parallel upload processes (10 by default)', default=10, type=int)
+        parser.add_argument('-d', metavar = 'level',     help='debug level', type=int, default=logging.INFO)
+        parser.add_argument('-n',                        help='use service net (False by default)', default=False, type=bool)
+        parser.add_argument('-b',                        help='don\'t upload anything actually. (For test purposes)', default=False, type=bool)
         
         args = parser.parse_args()
         
         logger.setLevel(args.d)
         
-        connectionPool  = cloudfiles.ConnectionPool(args.username, args.apiKey, servicenet=args.n)
+        connectionPool  = cloudfiles.ConnectionPool(args.u, args.k, servicenet=args.n)
         workQueue       = Queue.Queue(args.t*3)
-        containerName   = args.container
+        containerName   = args.c
         path            = args.s
         prefix          = args.p
         bogus           = args.b
+        totalFiles      = 0
 
         threads = []
         beginTime = datetime.now() 
@@ -88,24 +90,23 @@ if __name__ == '__main__':
         
         for root, dirs, files in os.walk(path, followlinks=False):
             for curFile in files:
-#                if not path == root:
-#                    dir = root[len(path)+1:len(root)]+'/'
-#                else:
-#                    dir = ''
+                totalFiles = totalFiles + 1
                 dir = os.path.relpath(path, root)
                 task = {'src' : os.path.join(root, curFile),
                         'dst' : os.path.join(prefix, dir, curFile)}                
-                logger.debug('Put task for workers: ' + unicode(task))
+                logger.debug('Main thread: Put task for workers: ' + unicode(task))
                 workQueue.put(task)
         
+        logger.info('Main thread: There is no files more. Wait for worker threads.')
         workQueue.join()
         finishFlag = True
-        logger.info('Work is done at:  ' + unicode(datetime.now() - beginTime))
+        logger.info('Work is done at: ' + unicode(datetime.now() - beginTime))
         logger.info('        threads: ' + args.t)
         logger.info('  dropped tasks: ' + dropped)
+        logger.info(' files uploaded: ' + totalFiles)        
         
-        for thread in threads:
-            if (thread.isAlive()): thread.join() 
+#        for thread in threads:
+#            if (thread.isAlive()): thread.join() 
         
     except Exception as error:
         logger.error(unicode(error))
