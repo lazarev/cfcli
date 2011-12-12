@@ -27,7 +27,7 @@ class UploadThread (threading.Thread):
         logger.debug(self.name + ' online')
         connection = connectionPool.get()
         container = connection.get_container(containerName)
-        while not finishFlag:
+        while True:
             try:
                 task = workQueue.get(block=True, timeout=1)
                 logger.info(self.name + ' execute: ' + unicode(task))
@@ -49,6 +49,8 @@ class UploadThread (threading.Thread):
                 
                 workQueue.task_done()
             except Queue.Empty:
+                if finishFlag: 
+                    break
                 logger.debug(self.name + ' Working queue is empty. Looping.')
                 pass
         logger.debug(self.name + 'Got finish flag. Put connection back.')
@@ -98,20 +100,23 @@ if __name__ == '__main__':
                 totalFiles = totalFiles + 1
                 relDir = os.path.relpath(filePath, path)
                 task = {'src' : os.path.join(filePath, curFile),
-                        'dst' : os.path.join(prefix, dir, curFile)}                
+                        'dst' : os.path.join(prefix, relDir, curFile)}                
                 logger.debug('Main thread: Put task for workers: ' + unicode(task))
                 workQueue.put(task)
         
         logger.info('Main thread: There is no files more. Wait for worker threads.')
-        workQueue.join()
+        #workQueue.join()
         finishFlag = True
         logger.info('Work is done at: ' + unicode(datetime.now() - beginTime))
-        logger.info('        threads: ' + args.t)
-        logger.info('  dropped tasks: ' + dropped)
-        logger.info(' files uploaded: ' + totalFiles)        
+        logger.info('        threads: ' + unicode(args.t))
+        logger.info('  dropped tasks: ' + unicode(dropped))
+        logger.info(' files uploaded: ' + unicode(totalFiles))
         
-#        for thread in threads:
-#            if (thread.isAlive()): thread.join() 
+	logger.debug('Witing for threads to stop')
+        for thread in threads:
+            if (thread.isAlive()): 
+        	logger.debug('Waiting for: %s' % thread.name)
+        	thread.join() 
         
     except Exception as error:
         logger.error(unicode(error))
