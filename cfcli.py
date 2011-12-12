@@ -91,11 +91,11 @@ if __name__ == '__main__':
             thread.start()
             threads.append(thread)
         
-        for root, dirs, files in os.walk(path, followlinks=False):
+        for filePath, dirs, files in os.walk(path, followlinks=False):
             for curFile in files:
                 totalFiles = totalFiles + 1
-                dir = os.path.relpath(path, root)
-                task = {'src' : os.path.join(root, curFile),
+                dir = os.path.relpath(filePath, path)
+                task = {'src' : os.path.join(filePath, curFile),
                         'dst' : os.path.join(prefix, dir, curFile)}                
                 logger.debug('Main thread: Put task for workers: ' + unicode(task))
                 workQueue.put(task)
