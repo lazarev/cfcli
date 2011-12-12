@@ -41,7 +41,7 @@ class UploadThread (threading.Thread):
                         logger.debug(self.name + ' task is done')
                         break
                     except :
-                        logger.error(self.name + '('+ tries +' tries available)' + +' : ' + sys.exc_info()[0])
+                        logger.error(self.name + '('+ tries +' tries available): ' + unicode(sys.exc_info()[0]))
                         tries = tries - 1                                               
                         if (tries==0):
                             logger.error(self.name + ' task execution tries exceeded. Dropping task.')
@@ -98,7 +98,7 @@ if __name__ == '__main__':
                 totalFiles = totalFiles + 1
                 relDir = os.path.relpath(filePath, path)
                 task = {'src' : os.path.join(filePath, curFile),
-                        'dst' : os.path.join(prefix, relDir, curFile)}                
+                        'dst' : os.path.join(prefix, dir, curFile)}                
                 logger.debug('Main thread: Put task for workers: ' + unicode(task))
                 workQueue.put(task)
         
