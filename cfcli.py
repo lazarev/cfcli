@@ -63,12 +63,15 @@ if __name__ == '__main__':
         parser.add_argument('-p', metavar = 'prefix',    help='path prefix for objects to create', default='')
         parser.add_argument('-t', metavar = 'number',    help='number of parallel upload processes (10 by default)', default=10, type=int)
         parser.add_argument('-d', metavar = 'level',     help='debug level', type=int, default=logging.INFO)
+        parser.add_argument('-f', metavar = 'filename',  help='write logs to file')
         parser.add_argument('-n',                        help='use service net (False by default)', default=False, type=bool)
         parser.add_argument('-b',                        help='don\'t upload anything actually. (For test purposes)', default=False, type=bool)
         
         args = parser.parse_args()
         
         logger.setLevel(args.d)
+        
+        if args.f: logger.addHandler(logging.FileHandler(args.f))
         
         connectionPool  = cloudfiles.ConnectionPool(args.u, args.k, servicenet=args.n)
         workQueue       = Queue.Queue(args.t*3)
