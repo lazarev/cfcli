@@ -49,7 +49,9 @@ class UploadThread (threading.Thread):
                 
                 workQueue.task_done()
             except Queue.Empty:
+                logger.debug(self.name + ' Working queue is empty. Looping.')
                 pass
+        logger.debug(self.name + 'Got finish flag. Put connection back.')
         connectionPool.put(connection)            
         logger.debug(self.name + ' offline')
 
@@ -94,9 +96,9 @@ if __name__ == '__main__':
         for filePath, dirs, files in os.walk(path, followlinks=False):
             for curFile in files:
                 totalFiles = totalFiles + 1
-                dir = os.path.relpath(filePath, path)
+                relDir = os.path.relpath(filePath, path)
                 task = {'src' : os.path.join(filePath, curFile),
-                        'dst' : os.path.join(prefix, dir, curFile)}                
+                        'dst' : os.path.join(prefix, relDir, curFile)}                
                 logger.debug('Main thread: Put task for workers: ' + unicode(task))
                 workQueue.put(task)
         
