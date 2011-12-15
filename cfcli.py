@@ -4,119 +4,270 @@ Created on 05.12.2011
 
 @author: Lazarev
 '''
-import os, sys
+import os
 import cloudfiles
 import threading
 import Queue
 from datetime import datetime
 import logging
 import argparse
+import traceback
 
 logger          = logging.getLogger('cfcli')
-console         = logging.StreamHandler()
-logger.addHandler(console)
-finishFlag      = False
-workQueue       = None
-connectionPool  = None
-containerName   = None
-dropped         = 0
-bogus           = False
+logger.addHandler(logging.StreamHandler())
 
-class UploadThread (threading.Thread):
+class WorkerThread (threading.Thread):
+    def __init__(self, taskQueue, pool):
+        self.taskQueue = taskQueue
+        self.pool = pool
+        threading.Thread.__init__(self)
+
     def run(self):        
         logger.debug(self.name + ' online')
-        connection = connectionPool.get()
-        container = connection.get_container(containerName)
-        while True:
-            try:
-                task = workQueue.get(block=True, timeout=1)
-                logger.info(self.name + ' execute: ' + unicode(task))
-                
-                #overcome problems in lower levels code
-                tries = 10
-                while tries > 0 and not bogus:
+        while not self.taskQueue.finishFlag:
+            try:                 
+                task = self.taskQueue.get(block=True, timeout=1)                
+                logger.debug(self.name + ' execute: ' + unicode(task))
+                if not self.taskQueue.bogus:
+                    connection = self.pool.get()
                     try:
-                        obj = container.create_object(task['dst'])
-                        obj.load_from_filename(task['src'])
-                        logger.debug(self.name + ' task is done')
-                        break
-                    except :
-                        logger.error(self.name + '('+ tries +' tries available): ' + unicode(sys.exc_info()[0]))
-                        tries = tries - 1                                               
-                        if (tries==0):
-                            logger.error(self.name + ' task execution tries exceeded. Dropping task.')
-                            dropped = dropped + 1                   
-                
-                workQueue.task_done()
+                        callback = task['callback']
+                        del(task['callback'])
+                        callback(connection, **task)
+                        logger.info('%s task finished successfully: %s' % (self.name, unicode(task)))
+                    except Exception:
+                        logger.error('%s task finished with error: %s' % (self.name, traceback.format_exc()))
+                    self.pool.put(connection)                
+                self.taskQueue.task_done()
             except Queue.Empty:
-                if finishFlag: 
-                    break
-                logger.debug(self.name + ' Working queue is empty. Looping.')
-                pass
-        logger.debug(self.name + 'Got finish flag. Put connection back.')
-        connectionPool.put(connection)            
+                logger.debug('%s waiting' % self.name)
         logger.debug(self.name + ' offline')
+        
+class TaskQueue(Queue.Queue):
+    '''Abstraction for multithreaded commands'''
+    finishFlag      = False
 
-if __name__ == '__main__':    
-    try:
-        parser = argparse.ArgumentParser(description='Upload directory tree into Rackspace Cloud Files store.')
-        parser.add_argument('-u', metavar = 'username',  help='account name', required=True)
-        parser.add_argument('-k', metavar = 'apiKey',    help='rack space API access key', required=True)
-        parser.add_argument('-c', metavar = 'container', help='target container')
-        parser.add_argument('-s', metavar = 'source',    help='source path to upload (current by default)', default='.')
-        parser.add_argument('-p', metavar = 'prefix',    help='path prefix for objects to create', default='')
-        parser.add_argument('-t', metavar = 'number',    help='number of parallel upload processes (10 by default)', default=10, type=int)
-        parser.add_argument('-d', metavar = 'level',     help='debug level', type=int, default=logging.INFO)
-        parser.add_argument('-f', metavar = 'filename',  help='write logs to file')
-        parser.add_argument('-n',                        help='use service net (False by default)', default=False, type=bool)
-        parser.add_argument('-b',                        help='don\'t upload anything actually. (For test purposes)', default=False, type=bool)
+    def __init__(self, pool, number=1, bogus=False):
+        '''
+        @param number: number of worker threads to run
+        '''
+        self.bogus=bogus
+        Queue.Queue.__init__(self, number*3)
         
-        args = parser.parse_args()
-        
-        logger.setLevel(args.d)
-        
-        if args.f: logger.addHandler(logging.FileHandler(args.f))
-        
-        connectionPool  = cloudfiles.ConnectionPool(args.u, args.k, servicenet=args.n)
-        workQueue       = Queue.Queue(args.t*3)
-        containerName   = args.c
-        path            = args.s
-        prefix          = args.p
-        bogus           = args.b
-        totalFiles      = 0
-
-        threads = []
-        beginTime = datetime.now() 
-       
-        # Init threads
-        for i in range(0,args.t):
-            thread = UploadThread()
+        self.threads = [] 
+        for i in range(0, number):
+            thread = WorkerThread(self, pool)
             thread.daemon = True
             thread.start()
-            threads.append(thread)
-        
-        for filePath, dirs, files in os.walk(path, followlinks=False):
-            for curFile in files:
-                totalFiles = totalFiles + 1
-                relDir = os.path.relpath(filePath, path)
-                task = {'src' : os.path.join(filePath, curFile),
-                        'dst' : os.path.join(prefix, relDir, curFile)}                
-                logger.debug('Main thread: Put task for workers: ' + unicode(task))
-                workQueue.put(task)
-        
-        logger.info('Main thread: There is no files more. Wait for worker threads.')
-        #workQueue.join()
-        finishFlag = True
-        logger.info('Work is done at: ' + unicode(datetime.now() - beginTime))
-        logger.info('        threads: ' + unicode(args.t))
-        logger.info('  dropped tasks: ' + unicode(dropped))
-        logger.info(' files uploaded: ' + unicode(totalFiles))
-        
-	logger.debug('Witing for threads to stop')
-        for thread in threads:
+            self.threads.append(thread)
+            
+    def Finish(self):
+        logger.debug('Waiting for queue is empty')
+        self.join()
+        self.finishFlag = True
+        logger.debug('Waiting for worker threads to stop')
+        for thread in self.threads:
             if (thread.isAlive()): 
-        	logger.debug('Waiting for: %s' % thread.name)
-        	thread.join() 
+                logger.debug('Waiting for: %s' % thread.name)
+                thread.join()
+    
+def uploadFile(connection, source, destination, container):
+    container_instance = connection.get_container(container)
+    for tries in range(0, 10):
+        try:
+            obj = container_instance.create_object(destination)
+            obj.load_from_filename(source)
+            logger.debug('%s uploaded' % destination)
+            return
+        except Exception:
+            logger.error('Upload file crashed on try %d with: %s' % (tries, traceback.format_exc()))    
+
+def deleteFile(connection, container_name, file_name):
+    logger.debug('Try to remove from %s : %s' % (container_name, file_name))
+    container_instance = connection.get_container(container_name)
+    container_instance.delete_object(file_name)
+    logger.info('%s removed' % file_name)
+    
+def command_upload(args):
+    # Parameters
+    container       = args.container
+    path            = args.source
+    prefix          = args.prefix
+   
+    connectionPool  = cloudfiles.ConnectionPool(args.username, args.key, servicenet=args.n)
+    queue = TaskQueue(connectionPool, args.threads, args.b)
+    
+    # Post tasks for workers
+    for filePath, dirs, files in os.walk(path, followlinks=False):
+        for curFile in files:
+#            totalFiles = totalFiles + 1
+            relDir = os.path.relpath(filePath, path)
+            task = {'callback'    : uploadFile, 
+                    'source'      : os.path.join(filePath, curFile),
+                    'destination' : os.path.join(prefix, relDir, curFile),
+                    'container'   : container }                
+            logger.debug('Main thread: Put task for workers: ' + unicode(task))
+            queue.put(task)
+    
+    queue.Finish()
+
+def command_list(args):
+    connection  = cloudfiles.Connection(args.username, args.key, servicenet=args.n)
+    if args.detailed:
+        result = connection.list_containers_info(args.max, args.marker)
+        result = ["%s\t%s files\t%s bytes" % (unicode(item['name']), unicode(item['count']), unicode(item['bytes'])) for item in result] 
+    else:
+        result = connection.list_containers(args.max, args.marker)
+    print '\n'.join(result)
+
+def command_listobjects(args):
+    connection  = cloudfiles.Connection(args.username, args.key, servicenet=args.n)
+    container = connection.get_container(args.container)
+    if args.detailed:
+        result = container.list_objects_info(limit=args.max, marker=args.marker, path=args.path)
+        result = ["%s\t%s\t%s\t%s\t%s" % 
+                  (unicode(item['name']), 
+                   unicode(item['content_type']), 
+                   unicode(item['bytes']), 
+                   unicode(item['last_modified']), 
+                   unicode(item['hash'])) for item in result] 
+    else:
+        result = container.list_objects(limit=args.max, marker=args.marker, path=args.path)
+    #TODO If i pass this output through grep code will be crashed with "UnicodeEncodeError: 'ascii' codec can't encode characters in position 18014-18017: ordinal not in range(128)"
+    print u'\n'.join(result)
+
+def command_create(args):
+    connection  = cloudfiles.Connection(args.username, args.key, servicenet=args.n)
+    connection.create_container(args.name, error_on_existing=True)
+    print "Container: %s created successfully" % args.name 
+
+def command_delete(args):
+    container_name = args.container
+    object_names = args.object
+    connection  = cloudfiles.Connection(args.username, args.key, servicenet=args.n)
+    
+    if object_names:
+        for name in object_names:
+            deleteFile(connection, container_name, name)
+    else:
+        connectionPool  = cloudfiles.ConnectionPool(args.username, args.key, servicenet=args.n)
+        queue = TaskQueue(connectionPool, args.threads, args.b)
         
-    except Exception as error:
-        logger.error(unicode(error))
+        container = connection.get_container(container_name)
+        for name in container.get_objects():
+            queue.put({'callback': deleteFile, 'file_name' : unicode(name), 'container_name': container_name })
+        
+        queue.Finish()
+        
+        if len(container.get_objects()):
+            print(container.get_objects())
+        else:
+            connection.delete_container(args.container)
+            print "Container: %s deleted successfully" % args.container
+
+if __name__ == '__main__':    
+    
+    options = argparse.ArgumentParser(description='Upload directory tree into Rackspace Cloud Files store.', add_help=False)
+    options.add_argument('-u', '--username',
+                        metavar = 'username',  
+                        help='account name', 
+                        required=True)
+    options.add_argument('-k', '--key',          
+                        metavar = 'apiKey',    
+                        help='rack space API access key', 
+                        required=True)
+    options.add_argument('-t', '--threads',      
+                        metavar = 'number',    
+                        help='number of parallel upload processes (10 by default)', 
+                        default=10, type=int)
+    options.add_argument('-l', '--loglevel',     
+                        metavar = 'level',     
+                        help='Log level (default %d)' % logging.INFO, 
+                        type=int, default=logging.INFO)
+    options.add_argument('-f', '--logfilename',  
+                        metavar = 'filename',  
+                        help='write logs to file')
+    options.add_argument('-n', 
+                        help='use service net (False by default)', 
+                        action='store_const', const=True)
+    options.add_argument('-b',
+                        help='don\'t do anything. (For debug purposes)', 
+                        action='store_const', const=True, default=False)
+    
+    parser = argparse.ArgumentParser(description='Rackspace Cloud Files manipulation toolkit')
+    subparsers = parser.add_subparsers( title='commands',
+                                        description='valid commands',
+                                        help='command --help')
+    
+    upload_parser = subparsers.add_parser('upload', 
+        help='Upload files or directory tree into container', 
+        parents=[options])
+    upload_parser.add_argument('-p', '--prefix',       
+                        metavar = 'prefix',    
+                        help='path prefix for objects to create', 
+                        default='')
+    upload_parser.add_argument('container', 
+        help='Destination container name')
+    upload_parser.add_argument('source', help='''File or directory to 
+        upload. File names in container would not get their path. 
+        For ex. ./test/test.txt will produce text.txt in container.
+        Use prefix if other behavior required.''')
+    upload_parser.set_defaults(func=command_upload)
+    
+    list_parser = subparsers.add_parser('list',   
+        help='List available containers', 
+        parents=[options])
+    list_parser.add_argument('-m', '--max',       
+                        metavar = 'limit',    
+                        help='number of results to return (up to 10000)', 
+                        default=None,
+                        type=int)
+    list_parser.add_argument('-d', '--detailed',
+                        help='return a list of Containers, including object count and size', 
+                        action='store_const', const=True)
+    list_parser.add_argument('marker', 
+        help='return only results whose name is greater than "marker"', default=None, nargs='?')
+    list_parser.set_defaults(func=command_list)
+    
+    listobjects_parser = subparsers.add_parser('listobjects',   
+        help='List objects of specified container', 
+        parents=[options])
+    listobjects_parser.add_argument('-m', '--max',       
+                        metavar = 'limit',    
+                        help='number of results to return (up to 10000)', 
+                        default=None,
+                        type=int)
+    listobjects_parser.add_argument('-d', '--detailed',
+                        help='return a list of Containers, including object count and size', 
+                        action='store_const', const=True)
+    listobjects_parser.add_argument('-p', '--path',
+                        help='return all objects in "path"', 
+                        default=None)
+    listobjects_parser.add_argument('container', 
+        help='container name')
+    listobjects_parser.add_argument('marker', 
+        help='return only results whose name is greater than "marker"', default=None, nargs='?')
+    listobjects_parser.set_defaults(func=command_listobjects)    
+    
+    create_parser = subparsers.add_parser('create', 
+        help='Create container', parents=[options])
+    create_parser.add_argument('name', 
+        help='Container name')
+    create_parser.set_defaults(func=command_create)
+    
+    delete_parser = subparsers.add_parser('delete', 
+        help='Delete container', parents=[options])
+    delete_parser.add_argument('container', 
+        help='Container name to delete/delete from')
+    delete_parser.add_argument('object', 
+        help='One or more objects to delete form container', nargs='*')
+    delete_parser.set_defaults(func=command_delete)
+            
+    args = parser.parse_args()
+
+    if args.logfilename: logger.addHandler(logging.FileHandler(args.logfilename))
+    if args.loglevel:    logger.setLevel(args.loglevel)
+    
+    beginTime = datetime.now()
+    args.func(args)
+    logger.info('Work done in: ' + unicode(datetime.now() - beginTime))
