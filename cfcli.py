@@ -31,17 +31,29 @@ class WorkerThread (threading.Thread):
                 if not self.taskQueue.bogus:
                     connection = self.pool.get()
                     try:
-                        callback = task['callback']
-                        del(task['callback'])
-                        callback(connection, **task)
-                        logger.info('%s task finished successfully: %s' % (self.name, unicode(task)))
+                        self.executeTask(task, connection)
                     except Exception:
-                        logger.error('%s task finished with error: %s' % (self.name, traceback.format_exc()))
-                    self.pool.put(connection)                
+                        logger.error('%s task execution error: %s' % (self.name, traceback.format_exc()))
+                    self.pool.put(connection)
                 self.taskQueue.task_done()
             except Queue.Empty:
                 logger.debug('%s waiting' % self.name)
         logger.debug(self.name + ' offline')
+        
+    def executeTask(self, task, connection):
+        callback = task['callback']
+        crash_log = list()
+        del(task['callback'])
+                    
+        for rep in range(0,10):
+            try:                        
+                callback(connection, **task)
+                logger.info('%s task finished successfully: %s' % (self.name, unicode(task)))
+                return
+            except:
+                crash_log.append(traceback.format_exc())
+        logger.error('%s task does not executed correctly within try limit.\nTask: %s\nError log: %s' % 
+                                                        (self.name, unicode(task), '\n'.join(crash_log)))
         
 class TaskQueue(Queue.Queue):
     '''Abstraction for multithreaded commands'''
@@ -62,10 +74,10 @@ class TaskQueue(Queue.Queue):
             self.threads.append(thread)
             
     def Finish(self):
-        logger.debug('Waiting for queue is empty')
+        logger.info('Waiting for queue is empty')
         self.join()
         self.finishFlag = True
-        logger.debug('Waiting for worker threads to stop')
+        logger.info('Waiting for worker threads to stop')
         for thread in self.threads:
             if (thread.isAlive()): 
                 logger.debug('Waiting for: %s' % thread.name)
@@ -73,20 +85,12 @@ class TaskQueue(Queue.Queue):
     
 def uploadFile(connection, source, destination, container):
     container_instance = connection.get_container(container)
-    for tries in range(0, 10):
-        try:
-            obj = container_instance.create_object(destination)
-            obj.load_from_filename(source)
-            logger.debug('%s uploaded' % destination)
-            return
-        except Exception:
-            logger.error('Upload file crashed on try %d with: %s' % (tries, traceback.format_exc()))    
+    obj = container_instance.create_object(destination)
+    obj.load_from_filename(source)
 
 def deleteFile(connection, container_name, file_name):
-    logger.debug('Try to remove from %s : %s' % (container_name, file_name))
     container_instance = connection.get_container(container_name)
     container_instance.delete_object(file_name)
-    logger.info('%s removed' % file_name)
     
 def command_upload(args):
     # Parameters
@@ -100,7 +104,6 @@ def command_upload(args):
     # Post tasks for workers
     for filePath, dirs, files in os.walk(path, followlinks=False):
         for curFile in files:
-#            totalFiles = totalFiles + 1
             relDir = os.path.relpath(filePath, path)
             task = {'callback'    : uploadFile, 
                     'source'      : os.path.join(filePath, curFile),
@@ -269,5 +272,8 @@ if __name__ == '__main__':
     if args.loglevel:    logger.setLevel(args.loglevel)
     
     beginTime = datetime.now()
-    args.func(args)
-    logger.info('Work done in: ' + unicode(datetime.now() - beginTime))
+    try:
+        args.func(args)
+        logger.info('Work done in: ' + unicode(datetime.now() - beginTime))
+    except:
+        logger.error('Command %s execution error: %s' % (unicode(args), traceback.format_exc()))
